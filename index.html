@@ -35,9 +35,24 @@
       <div class="settings-panel" id="settingsPanel" hidden>
         <div class="settings-row">
           <span class="settings-label" id="themeSettingLabel">Theme</span>
-          <div class="segmented-control" role="group" aria-labelledby="themeSettingLabel">
+          <div class="segmented-control two-segments" role="group" aria-labelledby="themeSettingLabel">
             <button class="segment-option" type="button" data-theme="light" aria-pressed="false">Light</button>
             <button class="segment-option" type="button" data-theme="dark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label" id="chartTypeSettingLabel">Chart</span>
+          <div class="segmented-control two-segments" role="group" aria-labelledby="chartTypeSettingLabel">
+            <button class="segment-option" type="button" data-chart-type="line" aria-pressed="false">Line</button>
+            <button class="segment-option" type="button" data-chart-type="candles" aria-pressed="true">Candles</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label" id="chartPeriodSettingLabel">Period</span>
+          <div class="segmented-control three-segments chart-period-control" role="group" aria-labelledby="chartPeriodSettingLabel">
+            <button class="segment-option" type="button" data-chart-months="3" aria-pressed="false">3M</button>
+            <button class="segment-option" type="button" data-chart-months="6" aria-pressed="true">6M</button>
+            <button class="segment-option" type="button" data-chart-months="12" aria-pressed="false">12M</button>
           </div>
         </div>
         <button class="settings-page-button" id="chartPageButton" type="button">
@@ -126,6 +141,7 @@
             </defs>
             <g class="chart-grid" id="chartGrid"></g>
             <g class="chart-labels" id="chartLabels"></g>
+            <g class="chart-candles" id="chartCandles"></g>
             <path class="chart-area" id="chartArea" d=""></path>
             <path class="chart-line" id="chartLine" d=""></path>
             <g class="chart-points" id="chartPoints"></g>

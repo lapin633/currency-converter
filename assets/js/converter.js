@@ -67,19 +67,24 @@
       theme: "Theme",
       lightTheme: "Light",
       darkTheme: "Dark",
+      chartType: "Chart",
+      lineChart: "Line",
+      candleChart: "Candles",
+      chartPeriod: "Period",
       chartPage: "Price chart",
       converterPage: "Converter",
       backToConverter: "Back to converter",
       chartTitle: "Price chart",
       chartSubtitle: "EUR against selected currency",
       chartCurrency: "Chart currency",
-      chartRange: "6 months",
+      chartRange: months => `${months} months`,
       chartLatest: "Latest",
       chartChange: "Change",
       chartLoading: "Loading chart...",
       chartUpdating: "Updating chart",
       chartUnavailable: "Chart is unavailable",
       chartTooltip: (date, value, currency) => `${date}: ${value} ${currency}`,
+      candleTooltip: (range, open, high, low, close, currency) => `${range} · O ${open} ${currency} · H ${high} · L ${low} · C ${close}`,
       chartSource: date => `Frankfurter time series to ${date}`,
       chartSavedData: text => `${text} · saved data`
     },
@@ -108,19 +113,24 @@
       theme: "Тема",
       lightTheme: "Светлая",
       darkTheme: "Тёмная",
+      chartType: "График",
+      lineChart: "Линия",
+      candleChart: "Свечи",
+      chartPeriod: "Период",
       chartPage: "График курса",
       converterPage: "Конвертер",
       backToConverter: "Назад к конвертеру",
       chartTitle: "График курса",
       chartSubtitle: "EUR к выбранной валюте",
       chartCurrency: "Валюта графика",
-      chartRange: "6 месяцев",
+      chartRange: months => `${months} мес.`,
       chartLatest: "Последний",
       chartChange: "Изменение",
       chartLoading: "Загрузка графика...",
       chartUpdating: "Обновляем график",
       chartUnavailable: "График пока недоступен",
       chartTooltip: (date, value, currency) => `${date}: ${value} ${currency}`,
+      candleTooltip: (range, open, high, low, close, currency) => `${range} · О ${open} ${currency} · М ${high} · Н ${low} · З ${close}`,
       chartSource: date => `Динамика Frankfurter до ${date}`,
       chartSavedData: text => `${text} · сохранённые данные`
     }
@@ -142,6 +152,8 @@
   const settingsToggleText = document.getElementById("settingsToggleText");
   const settingsPanel = document.getElementById("settingsPanel");
   const themeSettingLabel = document.getElementById("themeSettingLabel");
+  const chartTypeSettingLabel = document.getElementById("chartTypeSettingLabel");
+  const chartPeriodSettingLabel = document.getElementById("chartPeriodSettingLabel");
   const chartPageButton = document.getElementById("chartPageButton");
   const chartPageButtonText = document.getElementById("chartPageButtonText");
   const converterPage = document.getElementById("converterPage");
@@ -162,6 +174,7 @@
   const priceChartEl = document.getElementById("priceChart");
   const chartGridEl = document.getElementById("chartGrid");
   const chartLabelsEl = document.getElementById("chartLabels");
+  const chartCandlesEl = document.getElementById("chartCandles");
   const chartAreaEl = document.getElementById("chartArea");
   const chartLineEl = document.getElementById("chartLine");
   const chartPointsEl = document.getElementById("chartPoints");
@@ -175,12 +188,16 @@
   const languageSwitch = document.querySelector(".language-switch");
   const languageButtons = Array.from(document.querySelectorAll("[data-language]"));
   const themeButtons = Array.from(document.querySelectorAll("[data-theme]"));
+  const chartTypeButtons = Array.from(document.querySelectorAll("[data-chart-type]"));
+  const chartPeriodButtons = Array.from(document.querySelectorAll("[data-chart-months]"));
   let rates = { EUR: 1 };
   let currentResult = null;
   let loading = false;
   const savedSettings = getSettings();
   let language = savedSettings?.language || "en";
   let theme = ["light", "dark"].includes(savedSettings?.theme) ? savedSettings.theme : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  let chartType = ["line", "candles"].includes(savedSettings?.chartType) ? savedSettings.chartType : "candles";
+  let chartMonths = [3, 6, 12].includes(Number(savedSettings?.chartMonths)) ? Number(savedSettings.chartMonths) : 6;
   let currencyLabelMode = "name";
   let feedbackTimer;
   let swapTimeline;
@@ -552,7 +569,7 @@
 
   function saveSettings() {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ from: fromEl.value, to: toEl.value, chartCurrency: chartCurrencyEl.value, language, theme }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ from: fromEl.value, to: toEl.value, chartCurrency: chartCurrencyEl.value, language, theme, chartType, chartMonths }));
     } catch {
       return false;
     }
@@ -694,6 +711,12 @@
     return date.toISOString().slice(0, 10);
   }
 
+  function getIsoMonthDate(offsetMonths = 0) {
+    const date = new Date();
+    date.setMonth(date.getMonth() + offsetMonths);
+    return date.toISOString().slice(0, 10);
+  }
+
   function formatDisplayDate(value) {
     const parts = String(value || "").match(/(\d{4})-(\d{2})-(\d{2})/);
     if (!parts) return "";
@@ -706,22 +729,33 @@
     return language === "ru" ? `${parts[3]}.${parts[2]}` : `${parts[2]}/${parts[3]}`;
   }
 
-  function getChartCacheKey(currency) {
-    return `${CHART_CACHE_KEY}_${currency}_${getIsoDate()}`;
+  function getChartCacheKey(currency, months = chartMonths) {
+    return `${CHART_CACHE_KEY}_${currency}_${months}_${getIsoDate()}`;
   }
 
-  function readChartCache(currency) {
+  function readChartCache(currency, months = chartMonths, allowStale = false) {
     try {
-      const cache = JSON.parse(localStorage.getItem(getChartCacheKey(currency)));
-      return Array.isArray(cache?.points) && cache.points.length >= 2 ? cache : null;
+      const cache = JSON.parse(localStorage.getItem(getChartCacheKey(currency, months)));
+      if (Array.isArray(cache?.points) && cache.points.length >= 2) return cache;
+      if (!allowStale) return null;
+      const prefix = `${CHART_CACHE_KEY}_${currency}_${months}_`;
+      let latestCache = null;
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith(prefix)) continue;
+        const item = JSON.parse(localStorage.getItem(key));
+        if (!Array.isArray(item?.points) || item.points.length < 2) continue;
+        if (!latestCache || Number(item.savedAt || 0) > Number(latestCache.savedAt || 0)) latestCache = item;
+      }
+      return latestCache;
     } catch {
       return null;
     }
   }
 
-  function saveChartCache(currency, points) {
+  function saveChartCache(currency, months, points) {
     try {
-      localStorage.setItem(getChartCacheKey(currency), JSON.stringify({ points, savedAt: Date.now() }));
+      localStorage.setItem(getChartCacheKey(currency, months), JSON.stringify({ points, savedAt: Date.now() }));
     } catch {
       return false;
     }
@@ -731,6 +765,7 @@
   function clearChart() {
     chartGridEl.replaceChildren();
     chartLabelsEl.replaceChildren();
+    chartCandlesEl.replaceChildren();
     chartPointsEl.replaceChildren();
     chartAreaEl.setAttribute("d", "");
     chartLineEl.setAttribute("d", "");
@@ -739,6 +774,52 @@
     chartMappedPoints = [];
     chartBounds = null;
     hideChartTooltip();
+  }
+
+  function buildCandles(points) {
+    const sortedPoints = points.slice().sort((a, b) => a.date.localeCompare(b.date));
+    const bucketSize = chartMonths <= 3 ? 3 : chartMonths <= 6 ? 5 : 10;
+    const buckets = [];
+    for (let index = 0; index < sortedPoints.length; index += bucketSize) {
+      buckets.push(sortedPoints.slice(index, index + bucketSize));
+    }
+    return buckets.map(bucket => {
+      const sorted = bucket.slice().sort((a, b) => a.date.localeCompare(b.date));
+      const values = sorted.map(point => point.value);
+      return {
+        date: sorted[sorted.length - 1].date,
+        startDate: sorted[0].date,
+        endDate: sorted[sorted.length - 1].date,
+        open: sorted[0].value,
+        high: Math.max(...values),
+        low: Math.min(...values),
+        close: sorted[sorted.length - 1].value
+      };
+    });
+  }
+
+  function parseChartRows(data, currency) {
+    const rows = Array.isArray(data)
+      ? data
+      : Object.entries(data?.rates || {}).map(([date, ratesForDate]) => ({
+        date,
+        quote: currency,
+        rate: ratesForDate?.[currency]
+      }));
+    return rows
+      .filter(item => item.quote === currency && Number.isFinite(Number(item.rate)) && Number(item.rate) > 0)
+      .map(item => ({ date: item.date, value: Number(item.rate) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async function fetchChartPoints(from, currency, signal) {
+    const url = `https://api.frankfurter.dev/v2/rates?from=${from}&base=EUR&quotes=${currency}`;
+    const response = await fetch(url, { signal, cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP error");
+    const data = await response.json();
+    const points = parseChartRows(data, currency);
+    if (points.length < 2) throw new Error("Missing chart data");
+    return points;
   }
 
   function drawChart(points) {
@@ -753,22 +834,43 @@
     const width = 520;
     const height = 260;
     const padding = { top: 24, right: 64, bottom: 42, left: 42 };
-    const values = points.map(point => point.value);
+    const candleMode = chartType === "candles";
+    const candles = buildCandles(points);
+    const series = candleMode ? candles : points;
+    if (series.length < 2) {
+      chartEmptyEl.hidden = false;
+      chartEmptyEl.textContent = messages[language].chartUnavailable;
+      return;
+    }
+    const values = candleMode ? series.flatMap(point => [point.high, point.low]) : series.map(point => point.value);
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min || Math.max(max * 0.01, 0.01);
-    const xStep = (width - padding.left - padding.right) / (points.length - 1);
+    const xStep = (width - padding.left - padding.right) / (series.length - 1);
     const toY = value => padding.top + (max - value) * (height - padding.top - padding.bottom) / range;
-    const mapped = points.map((point, index) => ({
+    const mapped = series.map((point, index) => candleMode ? {
+      x: padding.left + index * xStep,
+      y: toY(point.close),
+      yOpen: toY(point.open),
+      yClose: toY(point.close),
+      yHigh: toY(point.high),
+      yLow: toY(point.low),
+      value: point.close,
+      date: point.date,
+      startDate: point.startDate,
+      endDate: point.endDate,
+      open: point.open,
+      high: point.high,
+      low: point.low,
+      close: point.close
+    } : {
       x: padding.left + index * xStep,
       y: toY(point.value),
       value: point.value,
       date: point.date
-    }));
+    });
     chartMappedPoints = mapped;
     chartBounds = { width, height, padding };
-    const linePath = mapped.map((point, index) => `${index ? "L" : "M"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
-    const areaPath = `${linePath} L ${mapped[mapped.length - 1].x.toFixed(2)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
     const grid = document.createDocumentFragment();
     const labels = document.createDocumentFragment();
     for (let index = 0; index < 4; index += 1) {
@@ -787,7 +889,7 @@
       label.textContent = formatRate(labelValue);
       labels.appendChild(label);
     }
-    const dateIndexes = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+    const dateIndexes = [0, Math.floor((series.length - 1) / 2), series.length - 1];
     dateIndexes.forEach((pointIndex, labelIndex) => {
       const point = mapped[pointIndex];
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -799,20 +901,55 @@
     });
     chartGridEl.appendChild(grid);
     chartLabelsEl.appendChild(labels);
-    chartAreaEl.setAttribute("d", areaPath);
-    chartLineEl.setAttribute("d", linePath);
-    const visiblePoints = [mapped[0], mapped[Math.floor(mapped.length / 2)], mapped[mapped.length - 1]];
-    const pointGroup = document.createDocumentFragment();
-    visiblePoints.forEach(point => {
-      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      circle.setAttribute("cx", point.x.toFixed(2));
-      circle.setAttribute("cy", point.y.toFixed(2));
-      circle.setAttribute("r", "4.5");
-      pointGroup.appendChild(circle);
-    });
-    chartPointsEl.appendChild(pointGroup);
-    const first = points[0].value;
-    const latest = points[points.length - 1].value;
+    if (candleMode) {
+      const candleGroup = document.createDocumentFragment();
+      const bodyWidth = Math.max(8, Math.min(13, xStep * 0.72));
+      const minBodyHeight = 9;
+      const minWickHeight = 20;
+      mapped.forEach(point => {
+        const rising = point.close >= point.open;
+        const item = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        item.setAttribute("class", `chart-candle ${rising ? "up" : "down"}`);
+        const rawBodyHeight = Math.abs(point.yClose - point.yOpen);
+        const bodyHeight = Math.max(minBodyHeight, rawBodyHeight);
+        const bodyCenter = (point.yOpen + point.yClose) / 2;
+        const bodyY = Math.max(padding.top, Math.min(height - padding.bottom - bodyHeight, bodyCenter - bodyHeight / 2));
+        const wickCenter = (point.yHigh + point.yLow) / 2;
+        const wickTop = Math.max(padding.top, Math.min(point.yHigh, wickCenter - minWickHeight / 2, bodyY - 4));
+        const wickBottom = Math.min(height - padding.bottom, Math.max(point.yLow, wickCenter + minWickHeight / 2, bodyY + bodyHeight + 4));
+        const wick = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        wick.setAttribute("x1", point.x.toFixed(2));
+        wick.setAttribute("x2", point.x.toFixed(2));
+        wick.setAttribute("y1", wickTop.toFixed(2));
+        wick.setAttribute("y2", wickBottom.toFixed(2));
+        const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        body.setAttribute("x", (point.x - bodyWidth / 2).toFixed(2));
+        body.setAttribute("y", bodyY.toFixed(2));
+        body.setAttribute("width", bodyWidth.toFixed(2));
+        body.setAttribute("height", bodyHeight.toFixed(2));
+        body.setAttribute("rx", "2.5");
+        item.append(wick, body);
+        candleGroup.appendChild(item);
+      });
+      chartCandlesEl.appendChild(candleGroup);
+    } else {
+      const linePath = mapped.map((point, index) => `${index ? "L" : "M"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+      const areaPath = `${linePath} L ${mapped[mapped.length - 1].x.toFixed(2)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
+      chartAreaEl.setAttribute("d", areaPath);
+      chartLineEl.setAttribute("d", linePath);
+      const visiblePoints = [mapped[0], mapped[Math.floor(mapped.length / 2)], mapped[mapped.length - 1]];
+      const pointGroup = document.createDocumentFragment();
+      visiblePoints.forEach(point => {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", point.x.toFixed(2));
+        circle.setAttribute("cy", point.y.toFixed(2));
+        circle.setAttribute("r", "4.5");
+        pointGroup.appendChild(circle);
+      });
+      chartPointsEl.appendChild(pointGroup);
+    }
+    const first = candleMode ? series[0].open : series[0].value;
+    const latest = candleMode ? series[series.length - 1].close : series[series.length - 1].value;
     const change = (latest - first) / first * 100;
     chartLatestEl.textContent = formatRate(latest);
     chartChangeEl.textContent = `${change >= 0 ? "+" : ""}${formatNumber(change, 2, 2)}%`;
@@ -841,8 +978,14 @@
     chartHoverLineEl.setAttribute("y2", chartBounds.height - chartBounds.padding.bottom);
     chartHoverPointEl.setAttribute("cx", nearest.x.toFixed(2));
     chartHoverPointEl.setAttribute("cy", nearest.y.toFixed(2));
-    chartTooltipValueEl.textContent = `${formatRate(nearest.value)} ${chartCurrencyEl.value}`;
-    chartTooltipDateEl.textContent = formatDisplayDate(nearest.date);
+    if (nearest.close) {
+      const range = nearest.startDate === nearest.endDate ? formatDisplayDate(nearest.date) : `${formatDisplayDate(nearest.startDate)}-${formatDisplayDate(nearest.endDate)}`;
+      chartTooltipValueEl.textContent = `${formatRate(nearest.close)} ${chartCurrencyEl.value}`;
+      chartTooltipDateEl.textContent = messages[language].candleTooltip(range, formatRate(nearest.open), formatRate(nearest.high), formatRate(nearest.low), formatRate(nearest.close), chartCurrencyEl.value);
+    } else {
+      chartTooltipValueEl.textContent = `${formatRate(nearest.value)} ${chartCurrencyEl.value}`;
+      chartTooltipDateEl.textContent = formatDisplayDate(nearest.date);
+    }
     const tooltipX = nearest.x * rect.width / chartBounds.width;
     const tooltipY = nearest.y * rect.height / chartBounds.height;
     const clampedX = Math.min(Math.max(14, tooltipX - 58), rect.width - 116);
@@ -854,7 +997,7 @@
     const currency = chartCurrencyEl.value;
     const lastDate = points[points.length - 1]?.date || "";
     chartPairEl.textContent = `EUR / ${currency}`;
-    chartRangeEl.textContent = messages[language].chartRange;
+    chartRangeEl.textContent = messages[language].chartRange(chartMonths);
     drawChart(points);
     setChartStatus(stale ? messages[language].chartSavedData(messages[language].chartSource(formatDisplayDate(lastDate))) : messages[language].chartSource(formatDisplayDate(lastDate)), stale ? "warning" : "ready");
   }
@@ -862,11 +1005,14 @@
   async function loadChart(force = false) {
     if (chartLoading) return;
     const currency = chartCurrencyEl.value;
-    const cached = readChartCache(currency);
-    if (cached && !force) {
-      applyChart(cached.points);
+    const months = chartMonths;
+    const freshCache = readChartCache(currency, months);
+    if (freshCache && !force) {
+      applyChart(freshCache.points);
       return;
     }
+    const staleCache = readChartCache(currency, months, true);
+    if (staleCache && !force) applyChart(staleCache.points, true);
     chartLoading = true;
     chartRefreshBtn.disabled = true;
     chartRefreshBtn.classList.add("loading");
@@ -876,23 +1022,13 @@
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const from = getIsoDate(-185);
-      const to = getIsoDate();
-      const url = `https://api.frankfurter.dev/v2/rates?from=${from}&to=${to}&base=EUR&quotes=${currency}&group=week`;
-      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      if (!response.ok) throw new Error("HTTP error");
-      const data = await response.json();
-      if (!Array.isArray(data)) throw new Error("Invalid response");
-      const points = data
-        .filter(item => item.quote === currency && Number.isFinite(Number(item.rate)) && Number(item.rate) > 0)
-        .map(item => ({ date: item.date, value: Number(item.rate) }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-      if (points.length < 2) throw new Error("Missing chart data");
-      saveChartCache(currency, points);
+      const from = getIsoMonthDate(-months);
+      const points = await fetchChartPoints(from, currency, controller.signal);
+      saveChartCache(currency, months, points);
       applyChart(points);
     } catch {
-      if (cached) {
-        applyChart(cached.points, true);
+      if (staleCache) {
+        applyChart(staleCache.points, true);
       } else {
         clearChart();
         chartEmptyEl.hidden = false;
@@ -1014,6 +1150,29 @@
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", String(active));
     });
+    themeButtons[0]?.parentElement?.style.setProperty("--active-index", theme === "dark" ? 1 : 0);
+  }
+
+  function syncSegmentIndicators() {
+    themeButtons[0]?.parentElement?.style.setProperty("--active-index", theme === "dark" ? 1 : 0);
+    chartTypeButtons[0]?.parentElement?.style.setProperty("--active-index", chartType === "candles" ? 1 : 0);
+    chartPeriodButtons[0]?.parentElement?.style.setProperty("--active-index", String(chartMonths === 12 ? 2 : chartMonths === 6 ? 1 : 0));
+  }
+
+  function syncChartSettingButtons() {
+    chartTypeButtons.forEach(button => {
+      const active = button.dataset.chartType === chartType;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    chartTypeButtons[0]?.parentElement?.style.setProperty("--active-index", chartType === "candles" ? 1 : 0);
+    chartPeriodButtons.forEach(button => {
+      const active = Number(button.dataset.chartMonths) === chartMonths;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    chartPeriodButtons[0]?.parentElement?.style.setProperty("--active-index", String(chartMonths === 12 ? 2 : chartMonths === 6 ? 1 : 0));
+    syncSegmentIndicators();
   }
 
   function applyTheme() {
@@ -1025,6 +1184,7 @@
       settingsPanel.hidden = false;
       requestAnimationFrame(() => {
         settingsPanel.dataset.open = "true";
+        syncSegmentIndicators();
       });
     } else {
       delete settingsPanel.dataset.open;
@@ -1077,9 +1237,14 @@
     syncPageButton();
     settingsToggle.setAttribute("aria-label", settingsPanel.hidden ? text.settings : text.closeSettings);
     themeSettingLabel.textContent = text.theme;
+    chartTypeSettingLabel.textContent = text.chartType;
+    chartPeriodSettingLabel.textContent = text.chartPeriod;
     themeButtons.forEach(button => {
       const key = `${button.dataset.theme}Theme`;
       button.textContent = text[key];
+    });
+    chartTypeButtons.forEach(button => {
+      button.textContent = button.dataset.chartType === "candles" ? text.candleChart : text.lineChart;
     });
     fromEl.setAttribute("aria-label", text.sourceCurrency);
     toEl.setAttribute("aria-label", text.targetCurrency);
@@ -1093,7 +1258,7 @@
     chartCurrencyEl.setAttribute("aria-label", text.chartCurrency);
     chartTitleEl.textContent = text.chartTitle;
     chartSubtitleEl.textContent = text.chartSubtitle;
-    chartRangeEl.textContent = text.chartRange;
+    chartRangeEl.textContent = text.chartRange(chartMonths);
     chartLatestLabelEl.textContent = text.chartLatest;
     chartChangeLabelEl.textContent = text.chartChange;
     chartRefreshBtn.setAttribute("aria-label", text.chartUpdating);
@@ -1101,6 +1266,8 @@
     if (!copyBtn.classList.contains("success") && !copyBtn.classList.contains("error")) copyText.textContent = text.copy;
     syncLanguageButtons();
     syncThemeButtons();
+    syncChartSettingButtons();
+    requestAnimationFrame(syncSegmentIndicators);
     syncCustomSelect(fromEl);
     syncCustomSelect(toEl);
     syncCustomSelect(chartCurrencyEl);
@@ -1140,6 +1307,25 @@
       saveSettings();
       applyTheme();
       syncThemeButtons();
+    });
+  });
+  chartTypeButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      chartType = button.dataset.chartType === "line" ? "line" : "candles";
+      saveSettings();
+      syncChartSettingButtons();
+      if (chartPoints.length) applyChart(chartPoints);
+    });
+  });
+  chartPeriodButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      const nextMonths = Number(button.dataset.chartMonths);
+      if (![3, 6, 12].includes(nextMonths) || nextMonths === chartMonths) return;
+      chartMonths = nextMonths;
+      saveSettings();
+      syncChartSettingButtons();
+      if (activePage === "chart") loadChart();
+      else chartRangeEl.textContent = messages[language].chartRange(chartMonths);
     });
   });
   chartPageButton.addEventListener("click", () => switchPage(activePage === "chart" ? "converter" : "chart"));
@@ -1183,7 +1369,10 @@
       if (!control.shell.contains(event.target) && !control.menu.contains(event.target)) closeCustomSelect(control);
     });
   });
-  window.addEventListener("resize", () => closeAllCustomSelects(), { passive: true });
+  window.addEventListener("resize", () => {
+    closeAllCustomSelects();
+    syncSegmentIndicators();
+  }, { passive: true });
   window.addEventListener("scroll", event => {
     if (!isInsideSelectMenu(event.target)) closeAllCustomSelects();
   }, { passive: true, capture: true });
@@ -1195,5 +1384,8 @@
   loadRates();
   setInterval(() => {
     if (!readCache(false)) loadRates(true);
+  }, CHECK_INTERVAL);
+  setInterval(() => {
+    if (activePage === "chart" && !readChartCache(chartCurrencyEl.value, chartMonths)) loadChart(true);
   }, CHECK_INTERVAL);
 }());
