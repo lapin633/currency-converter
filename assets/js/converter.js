@@ -38,6 +38,7 @@
   const quoteList = list.filter(code => code !== "EUR").join(",");
   const API_URL = `https://api.frankfurter.dev/v2/rates?base=EUR&quotes=${quoteList}`;
   const CACHE_KEY = "fx_rates_frankfurter_v2";
+  const CHART_CACHE_KEY = "fx_chart_frankfurter_v2";
   const SETTINGS_KEY = "fx_settings_v2";
   const CHECK_INTERVAL = 30 * 60 * 1000;
   const messages = {
@@ -65,7 +66,22 @@
       closeSettings: "Close settings",
       theme: "Theme",
       lightTheme: "Light",
-      darkTheme: "Dark"
+      darkTheme: "Dark",
+      chartPage: "Price chart",
+      converterPage: "Converter",
+      backToConverter: "Back to converter",
+      chartTitle: "Price chart",
+      chartSubtitle: "EUR against selected currency",
+      chartCurrency: "Chart currency",
+      chartRange: "6 months",
+      chartLatest: "Latest",
+      chartChange: "Change",
+      chartLoading: "Loading chart...",
+      chartUpdating: "Updating chart",
+      chartUnavailable: "Chart is unavailable",
+      chartTooltip: (date, value, currency) => `${date}: ${value} ${currency}`,
+      chartSource: date => `Frankfurter time series to ${date}`,
+      chartSavedData: text => `${text} · saved data`
     },
     ru: {
       pageTitle: "Конвертер валют",
@@ -91,7 +107,22 @@
       closeSettings: "Закрыть настройки",
       theme: "Тема",
       lightTheme: "Светлая",
-      darkTheme: "Тёмная"
+      darkTheme: "Тёмная",
+      chartPage: "График курса",
+      converterPage: "Конвертер",
+      backToConverter: "Назад к конвертеру",
+      chartTitle: "График курса",
+      chartSubtitle: "EUR к выбранной валюте",
+      chartCurrency: "Валюта графика",
+      chartRange: "6 месяцев",
+      chartLatest: "Последний",
+      chartChange: "Изменение",
+      chartLoading: "Загрузка графика...",
+      chartUpdating: "Обновляем график",
+      chartUnavailable: "График пока недоступен",
+      chartTooltip: (date, value, currency) => `${date}: ${value} ${currency}`,
+      chartSource: date => `Динамика Frankfurter до ${date}`,
+      chartSavedData: text => `${text} · сохранённые данные`
     }
   };
   const amountEl = document.getElementById("amount");
@@ -111,6 +142,36 @@
   const settingsToggleText = document.getElementById("settingsToggleText");
   const settingsPanel = document.getElementById("settingsPanel");
   const themeSettingLabel = document.getElementById("themeSettingLabel");
+  const chartPageButton = document.getElementById("chartPageButton");
+  const chartPageButtonText = document.getElementById("chartPageButtonText");
+  const converterPage = document.getElementById("converterPage");
+  const chartPage = document.getElementById("chartPage");
+  const chartBack = document.getElementById("chartBack");
+  const chartCurrencyEl = document.getElementById("chartCurrency");
+  const chartTitleEl = document.getElementById("chartTitle");
+  const chartSubtitleEl = document.getElementById("chartSubtitle");
+  const chartPairEl = document.getElementById("chartPair");
+  const chartRangeEl = document.getElementById("chartRange");
+  const chartLatestLabelEl = document.getElementById("chartLatestLabel");
+  const chartChangeLabelEl = document.getElementById("chartChangeLabel");
+  const chartLatestEl = document.getElementById("chartLatest");
+  const chartChangeEl = document.getElementById("chartChange");
+  const chartStatusEl = document.getElementById("chartStatus");
+  const chartStatusTextEl = document.getElementById("chartStatusText");
+  const chartRefreshBtn = document.getElementById("chartRefresh");
+  const priceChartEl = document.getElementById("priceChart");
+  const chartGridEl = document.getElementById("chartGrid");
+  const chartLabelsEl = document.getElementById("chartLabels");
+  const chartAreaEl = document.getElementById("chartArea");
+  const chartLineEl = document.getElementById("chartLine");
+  const chartPointsEl = document.getElementById("chartPoints");
+  const chartHoverEl = document.getElementById("chartHover");
+  const chartHoverLineEl = document.getElementById("chartHoverLine");
+  const chartHoverPointEl = document.getElementById("chartHoverPoint");
+  const chartTooltipEl = document.getElementById("chartTooltip");
+  const chartTooltipValueEl = document.getElementById("chartTooltipValue");
+  const chartTooltipDateEl = document.getElementById("chartTooltipDate");
+  const chartEmptyEl = document.getElementById("chartEmpty");
   const languageSwitch = document.querySelector(".language-switch");
   const languageButtons = Array.from(document.querySelectorAll("[data-language]"));
   const themeButtons = Array.from(document.querySelectorAll("[data-theme]"));
@@ -123,6 +184,11 @@
   let currencyLabelMode = "name";
   let feedbackTimer;
   let swapTimeline;
+  let activePage = "converter";
+  let chartLoading = false;
+  let chartPoints = [];
+  let chartMappedPoints = [];
+  let chartBounds = null;
   const customSelectControls = new Map();
   const motionAllowed = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -225,7 +291,7 @@
   function syncCustomSelect(select) {
     const control = customSelectControls.get(select);
     if (!control) return;
-    const label = messages[language][select.id === "from" ? "sourceCurrency" : "targetCurrency"];
+    const label = getSelectLabel(select);
     control.value.textContent = formatCurrencyTrigger(select.value);
     control.trigger.setAttribute("aria-label", `${label}: ${formatCurrencyOption(select.value)}`);
     control.menu.setAttribute("aria-label", label);
@@ -234,6 +300,12 @@
       option.querySelector(".select-option-code").textContent = option.dataset.value;
       option.querySelector(".select-option-name").textContent = getCurrencyName(option.dataset.value);
     });
+  }
+
+  function getSelectLabel(select) {
+    if (select.id === "from") return messages[language].sourceCurrency;
+    if (select.id === "to") return messages[language].targetCurrency;
+    return messages[language].chartCurrency;
   }
 
   function getCurrencyName(code) {
@@ -282,7 +354,7 @@
     }
   }
 
-  function enhanceSelect(select) {
+  function enhanceSelect(select, codes = list) {
     if (customSelectControls.has(select)) return;
     const shell = select.closest(".select-shell");
     const trigger = document.createElement("button");
@@ -310,7 +382,7 @@
     scrollbar.setAttribute("aria-hidden", "true");
     scrollbar.appendChild(scrollbarThumb);
     trigger.append(value, chevron);
-    const options = list.map((code, index) => {
+    const options = codes.map((code, index) => {
       const option = document.createElement("button");
       const codeText = document.createElement("span");
       const nameText = document.createElement("span");
@@ -460,11 +532,14 @@
     const options = list.map(code => `<option value="${code}">${code}</option>`).join("");
     fromEl.innerHTML = options;
     toEl.innerHTML = options;
+    chartCurrencyEl.innerHTML = list.filter(code => code !== "EUR").map(code => `<option value="${code}">${code}</option>`).join("");
     const saved = getSettings();
     fromEl.value = saved?.from && list.includes(saved.from) ? saved.from : "USD";
     toEl.value = saved?.to && list.includes(saved.to) ? saved.to : "EUR";
+    chartCurrencyEl.value = saved?.chartCurrency && list.includes(saved.chartCurrency) && saved.chartCurrency !== "EUR" ? saved.chartCurrency : "USD";
     enhanceSelect(fromEl);
     enhanceSelect(toEl);
+    enhanceSelect(chartCurrencyEl, list.filter(code => code !== "EUR"));
   }
 
   function getSettings() {
@@ -477,7 +552,7 @@
 
   function saveSettings() {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ from: fromEl.value, to: toEl.value, language, theme }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ from: fromEl.value, to: toEl.value, chartCurrency: chartCurrencyEl.value, language, theme }));
     } catch {
       return false;
     }
@@ -606,6 +681,230 @@
   function setStatus(text, state = "ready") {
     statusTextEl.textContent = text;
     statusEl.className = `status ${state}`;
+  }
+
+  function setChartStatus(text, state = "ready") {
+    chartStatusTextEl.textContent = text;
+    chartStatusEl.className = `status chart-status ${state}`;
+  }
+
+  function getIsoDate(offsetDays = 0) {
+    const date = new Date();
+    date.setDate(date.getDate() + offsetDays);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function formatDisplayDate(value) {
+    const parts = String(value || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!parts) return "";
+    return language === "ru" ? `${parts[3]}.${parts[2]}.${parts[1]}` : `${parts[1]}-${parts[2]}-${parts[3]}`;
+  }
+
+  function formatChartTickDate(value) {
+    const parts = String(value || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!parts) return "";
+    return language === "ru" ? `${parts[3]}.${parts[2]}` : `${parts[2]}/${parts[3]}`;
+  }
+
+  function getChartCacheKey(currency) {
+    return `${CHART_CACHE_KEY}_${currency}_${getIsoDate()}`;
+  }
+
+  function readChartCache(currency) {
+    try {
+      const cache = JSON.parse(localStorage.getItem(getChartCacheKey(currency)));
+      return Array.isArray(cache?.points) && cache.points.length >= 2 ? cache : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveChartCache(currency, points) {
+    try {
+      localStorage.setItem(getChartCacheKey(currency), JSON.stringify({ points, savedAt: Date.now() }));
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  function clearChart() {
+    chartGridEl.replaceChildren();
+    chartLabelsEl.replaceChildren();
+    chartPointsEl.replaceChildren();
+    chartAreaEl.setAttribute("d", "");
+    chartLineEl.setAttribute("d", "");
+    chartLatestEl.textContent = "—";
+    chartChangeEl.textContent = "—";
+    chartMappedPoints = [];
+    chartBounds = null;
+    hideChartTooltip();
+  }
+
+  function drawChart(points) {
+    clearChart();
+    chartPoints = points;
+    if (points.length < 2) {
+      chartEmptyEl.hidden = false;
+      chartEmptyEl.textContent = messages[language].chartUnavailable;
+      return;
+    }
+    chartEmptyEl.hidden = true;
+    const width = 520;
+    const height = 260;
+    const padding = { top: 24, right: 64, bottom: 42, left: 42 };
+    const values = points.map(point => point.value);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || Math.max(max * 0.01, 0.01);
+    const xStep = (width - padding.left - padding.right) / (points.length - 1);
+    const toY = value => padding.top + (max - value) * (height - padding.top - padding.bottom) / range;
+    const mapped = points.map((point, index) => ({
+      x: padding.left + index * xStep,
+      y: toY(point.value),
+      value: point.value,
+      date: point.date
+    }));
+    chartMappedPoints = mapped;
+    chartBounds = { width, height, padding };
+    const linePath = mapped.map((point, index) => `${index ? "L" : "M"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+    const areaPath = `${linePath} L ${mapped[mapped.length - 1].x.toFixed(2)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
+    const grid = document.createDocumentFragment();
+    const labels = document.createDocumentFragment();
+    for (let index = 0; index < 4; index += 1) {
+      const ratio = index / 3;
+      const y = padding.top + ratio * (height - padding.top - padding.bottom);
+      const labelValue = max - ratio * range;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", padding.left);
+      line.setAttribute("x2", width - padding.right);
+      line.setAttribute("y1", y.toFixed(2));
+      line.setAttribute("y2", y.toFixed(2));
+      grid.appendChild(line);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", width - padding.right + 12);
+      label.setAttribute("y", (y + 4).toFixed(2));
+      label.textContent = formatRate(labelValue);
+      labels.appendChild(label);
+    }
+    const dateIndexes = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+    dateIndexes.forEach((pointIndex, labelIndex) => {
+      const point = mapped[pointIndex];
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", point.x.toFixed(2));
+      label.setAttribute("y", height - 10);
+      label.setAttribute("text-anchor", labelIndex === 0 ? "start" : labelIndex === 2 ? "end" : "middle");
+      label.textContent = formatChartTickDate(point.date);
+      labels.appendChild(label);
+    });
+    chartGridEl.appendChild(grid);
+    chartLabelsEl.appendChild(labels);
+    chartAreaEl.setAttribute("d", areaPath);
+    chartLineEl.setAttribute("d", linePath);
+    const visiblePoints = [mapped[0], mapped[Math.floor(mapped.length / 2)], mapped[mapped.length - 1]];
+    const pointGroup = document.createDocumentFragment();
+    visiblePoints.forEach(point => {
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", point.x.toFixed(2));
+      circle.setAttribute("cy", point.y.toFixed(2));
+      circle.setAttribute("r", "4.5");
+      pointGroup.appendChild(circle);
+    });
+    chartPointsEl.appendChild(pointGroup);
+    const first = points[0].value;
+    const latest = points[points.length - 1].value;
+    const change = (latest - first) / first * 100;
+    chartLatestEl.textContent = formatRate(latest);
+    chartChangeEl.textContent = `${change >= 0 ? "+" : ""}${formatNumber(change, 2, 2)}%`;
+    chartChangeEl.classList.toggle("positive", change >= 0);
+    chartChangeEl.classList.toggle("negative", change < 0);
+  }
+
+  function hideChartTooltip() {
+    chartHoverEl.hidden = true;
+    chartTooltipEl.hidden = true;
+  }
+
+  function updateChartTooltip(clientX) {
+    if (!chartMappedPoints.length || !chartBounds) return;
+    const rect = priceChartEl.getBoundingClientRect();
+    const x = (clientX - rect.left) * chartBounds.width / rect.width;
+    let nearest = chartMappedPoints[0];
+    for (const point of chartMappedPoints) {
+      if (Math.abs(point.x - x) < Math.abs(nearest.x - x)) nearest = point;
+    }
+    chartHoverEl.hidden = false;
+    chartTooltipEl.hidden = false;
+    chartHoverLineEl.setAttribute("x1", nearest.x.toFixed(2));
+    chartHoverLineEl.setAttribute("x2", nearest.x.toFixed(2));
+    chartHoverLineEl.setAttribute("y1", chartBounds.padding.top);
+    chartHoverLineEl.setAttribute("y2", chartBounds.height - chartBounds.padding.bottom);
+    chartHoverPointEl.setAttribute("cx", nearest.x.toFixed(2));
+    chartHoverPointEl.setAttribute("cy", nearest.y.toFixed(2));
+    chartTooltipValueEl.textContent = `${formatRate(nearest.value)} ${chartCurrencyEl.value}`;
+    chartTooltipDateEl.textContent = formatDisplayDate(nearest.date);
+    const tooltipX = nearest.x * rect.width / chartBounds.width;
+    const tooltipY = nearest.y * rect.height / chartBounds.height;
+    const clampedX = Math.min(Math.max(14, tooltipX - 58), rect.width - 116);
+    const clampedY = Math.max(14, tooltipY - 58);
+    chartTooltipEl.style.transform = `translate3d(${Math.round(clampedX)}px, ${Math.round(clampedY)}px, 0)`;
+  }
+
+  function applyChart(points, stale = false) {
+    const currency = chartCurrencyEl.value;
+    const lastDate = points[points.length - 1]?.date || "";
+    chartPairEl.textContent = `EUR / ${currency}`;
+    chartRangeEl.textContent = messages[language].chartRange;
+    drawChart(points);
+    setChartStatus(stale ? messages[language].chartSavedData(messages[language].chartSource(formatDisplayDate(lastDate))) : messages[language].chartSource(formatDisplayDate(lastDate)), stale ? "warning" : "ready");
+  }
+
+  async function loadChart(force = false) {
+    if (chartLoading) return;
+    const currency = chartCurrencyEl.value;
+    const cached = readChartCache(currency);
+    if (cached && !force) {
+      applyChart(cached.points);
+      return;
+    }
+    chartLoading = true;
+    chartRefreshBtn.disabled = true;
+    chartRefreshBtn.classList.add("loading");
+    chartEmptyEl.hidden = false;
+    chartEmptyEl.textContent = messages[language].chartLoading;
+    setChartStatus(messages[language].chartUpdating, "loading");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const from = getIsoDate(-185);
+      const to = getIsoDate();
+      const url = `https://api.frankfurter.dev/v2/rates?from=${from}&to=${to}&base=EUR&quotes=${currency}&group=week`;
+      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP error");
+      const data = await response.json();
+      if (!Array.isArray(data)) throw new Error("Invalid response");
+      const points = data
+        .filter(item => item.quote === currency && Number.isFinite(Number(item.rate)) && Number(item.rate) > 0)
+        .map(item => ({ date: item.date, value: Number(item.rate) }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      if (points.length < 2) throw new Error("Missing chart data");
+      saveChartCache(currency, points);
+      applyChart(points);
+    } catch {
+      if (cached) {
+        applyChart(cached.points, true);
+      } else {
+        clearChart();
+        chartEmptyEl.hidden = false;
+        chartEmptyEl.textContent = messages[language].chartUnavailable;
+        setChartStatus(messages[language].chartUnavailable, "error");
+      }
+    } finally {
+      clearTimeout(timeout);
+      chartLoading = false;
+      chartRefreshBtn.disabled = false;
+      chartRefreshBtn.classList.remove("loading");
+    }
   }
 
   function applyCache(cache, stale = false) {
@@ -737,6 +1036,36 @@
     settingsToggle.setAttribute("aria-label", open ? messages[language].closeSettings : messages[language].settings);
   }
 
+  function syncPageButton() {
+    const nextIsConverter = activePage === "chart";
+    const icon = chartPageButton.querySelector("[data-lucide]");
+    chartPageButtonText.textContent = messages[language][nextIsConverter ? "converterPage" : "chartPage"];
+    chartPageButton.setAttribute("aria-label", chartPageButtonText.textContent);
+    if (icon) {
+      icon.dataset.lucide = nextIsConverter ? "calculator" : "line-chart";
+      icon.textContent = nextIsConverter ? "⌁" : "↗";
+    }
+    if (window.lucide) window.lucide.createIcons({ attrs: { "stroke-width": 2.1 } });
+  }
+
+  function switchPage(nextPage) {
+    if (activePage === nextPage) return;
+    closeAllCustomSelects();
+    setSettingsOpen(false);
+    const next = nextPage === "chart" ? chartPage : converterPage;
+    const current = activePage === "chart" ? chartPage : converterPage;
+    activePage = nextPage;
+    next.hidden = false;
+    requestAnimationFrame(() => {
+      current.classList.remove("active");
+      current.hidden = true;
+      next.classList.add("active");
+      document.querySelector(".app")?.classList.toggle("chart-mode", nextPage === "chart");
+      syncPageButton();
+    });
+    if (nextPage === "chart") loadChart();
+  }
+
   function applyLanguage() {
     const text = messages[language];
     document.documentElement.lang = language;
@@ -745,6 +1074,7 @@
     document.querySelector(".converter")?.setAttribute("aria-label", text.sectionLabel);
     document.querySelector(".language-switch")?.setAttribute("aria-label", text.language);
     settingsToggleText.textContent = text.settings;
+    syncPageButton();
     settingsToggle.setAttribute("aria-label", settingsPanel.hidden ? text.settings : text.closeSettings);
     themeSettingLabel.textContent = text.theme;
     themeButtons.forEach(button => {
@@ -759,12 +1089,23 @@
     copyBtn.setAttribute("aria-label", text.copy);
     refreshBtn.setAttribute("aria-label", text.updatingRates);
     refreshBtn.title = text.updatingRates;
+    chartBack.setAttribute("aria-label", text.backToConverter);
+    chartCurrencyEl.setAttribute("aria-label", text.chartCurrency);
+    chartTitleEl.textContent = text.chartTitle;
+    chartSubtitleEl.textContent = text.chartSubtitle;
+    chartRangeEl.textContent = text.chartRange;
+    chartLatestLabelEl.textContent = text.chartLatest;
+    chartChangeLabelEl.textContent = text.chartChange;
+    chartRefreshBtn.setAttribute("aria-label", text.chartUpdating);
+    chartRefreshBtn.title = text.chartUpdating;
     if (!copyBtn.classList.contains("success") && !copyBtn.classList.contains("error")) copyText.textContent = text.copy;
     syncLanguageButtons();
     syncThemeButtons();
     syncCustomSelect(fromEl);
     syncCustomSelect(toEl);
+    syncCustomSelect(chartCurrencyEl);
     convert();
+    if (chartPoints.length) applyChart(chartPoints);
     const freshCache = readCache(false);
     const staleCache = freshCache || readCache(true);
     if (staleCache) applyCache(staleCache, !freshCache);
@@ -801,6 +1142,14 @@
       syncThemeButtons();
     });
   });
+  chartPageButton.addEventListener("click", () => switchPage(activePage === "chart" ? "converter" : "chart"));
+  chartBack.addEventListener("click", () => switchPage("converter"));
+  chartCurrencyEl.addEventListener("change", () => {
+    saveSettings();
+    syncCustomSelect(chartCurrencyEl);
+    loadChart(true);
+    animateSelection(chartCurrencyEl);
+  });
   settingsToggle.addEventListener("click", () => {
     setSettingsOpen(settingsPanel.dataset.open !== "true");
   });
@@ -808,6 +1157,17 @@
   refreshBtn.addEventListener("click", () => {
     animateIcon(refreshBtn, 360);
     loadRates(true);
+  });
+  chartRefreshBtn.addEventListener("click", () => {
+    animateIcon(chartRefreshBtn, 360);
+    loadChart(true);
+  });
+  priceChartEl.addEventListener("pointermove", event => {
+    updateChartTooltip(event.clientX);
+  });
+  priceChartEl.addEventListener("pointerleave", hideChartTooltip);
+  priceChartEl.addEventListener("pointerdown", event => {
+    updateChartTooltip(event.clientX);
   });
   copyBtn.addEventListener("click", async () => {
     if (!currentResult) return;
